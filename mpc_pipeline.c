@@ -15,6 +15,18 @@ OSQPInt n_cons = N_CONS;
  * ========================================================= */
 int main(void) {
 
+    /* ---------------------------------------------------------
+     * High-level runtime model:
+     *   1) Build an initial local linear model (bootstrap).
+     *   2) Solve MPC with current cached QP matrices.
+     *   3) Simulate plant + evaluate model mismatch (kappa).
+     *   4) Decide whether to re-linearize for the NEXT iteration.
+     *   5) Update vectors always, warm-start conditionally.
+     *
+     * Important: re-linearization decision is taken at the end of an
+     * iteration and affects the next solve call.
+     * --------------------------------------------------------- */
+
     // --- Dynamic Physics Variables ---
     OSQPFloat Ad[NX][NX] = {0};
     OSQPFloat Bd[NX][NU] = {0};
@@ -47,6 +59,7 @@ int main(void) {
     const OSQPFloat x_max[NX] = {OSQP_INFTY, OSQP_INFTY, OSQP_INFTY, OSQP_INFTY, OSQP_INFTY, OSQP_INFTY};
     const OSQPFloat u_min[NU] = {-2.0, -2.0};
     const OSQPFloat u_max[NU] = { 2.0,  2.0};
+    // Bootstrap linearization at initial state (before first solve).
     linearization(x_current, u_applied, Ad, Bd, d_lin);
     calc_h_gradient(x_current, jacobian_H, h_val);
     OSQPFloat Edist[NX] = {0};
@@ -79,10 +92,14 @@ int main(void) {
 
 
 
+    // Primary mismatch threshold for normal trigger-based re-linearization.
     const OSQPFloat eta_pri = 1.0; // CMoN Gatekeeper Tolerance
+    // Emergency threshold can bypass cooldown and force immediate refresh.
     const OSQPFloat emergency_kappa = FORCE_LINEARIZATION_EMERGENCY_KAPPA;
+    // User-tunable cadence guards: minimum burst and waiting period.
     const OSQPInt min_linearization_burst = (FORCE_LINEARIZATION_BURST > 1) ? FORCE_LINEARIZATION_BURST : 1;
     const OSQPInt min_warmstart_cooldown = (FORCE_LINEARIZATION_COOLDOWN > 0) ? FORCE_LINEARIZATION_COOLDOWN : 0;
+    // Internal state of cadence controller.
     OSQPInt burst_recompute_remaining = 0;
     OSQPInt warmstart_cooldown_remaining = 0;
     #if FORMULATION == OPT_CONDENSED
@@ -192,6 +209,7 @@ int main(void) {
     }
 
     // --- Simulation Loop ---
+    // Each loop iteration performs one closed-loop MPC step.
     int MAX_STEPS = Tsim / DT; 
     
     OSQPFloat x_next[NX];
@@ -222,7 +240,7 @@ int main(void) {
     printf("|");
     for (int i = 0; i < NU; i++) printf("-------");
     printf("\n");
-    // --- Pre-allocate Zero Arrays for Cold Starts ---
+    // Reserved buffers for optional explicit cold-start strategies.
     OSQPFloat *zero_x = (OSQPFloat *)calloc(n_vars, sizeof(OSQPFloat));
     OSQPFloat *zero_y = (OSQPFloat *)calloc(n_cons, sizeof(OSQPFloat));
     for (int step = 0; step < MAX_STEPS; step++) {
@@ -232,7 +250,7 @@ int main(void) {
         
 
     // -----------------------------------------------------
-    // Phase 1: Solve & Apply (OSQP solve using current matrices)
+    // Phase 1: Solve using currently cached QP matrices
     // -----------------------------------------------------
         timer_now(&iter_start);
         timer_now(&solver_start);
@@ -248,7 +266,7 @@ int main(void) {
             break;
         }
 
-        // 2. Extract control applied based on formulation
+    // 2) Extract first control action from optimal decision vector.
         #if FORMULATION == OPT_CONDENSED
             for (int i = 0; i < NU; i++) u_applied[i] = solver->solution->x[i];
         #elif FORMULATION == OPT_NON_CONDENSED
@@ -263,13 +281,13 @@ int main(void) {
             }
         #endif
 
-        // 3. RK2 Simulation vs Linear Prediction (CMoN Base)
+    // Keep pre-propagation values for logging and mismatch evaluation.
         for (int i = 0; i < NX; i++) log_x[i] = x_current[i];
         for (int i = 0; i < NU; i++) log_u[i] = u_applied[i];
 
-        // -----------------------------------------------------
-        // Phase 2: Prediction vs Reality (linear prediction vs RK2 ground truth)
-        // -----------------------------------------------------
+    // -----------------------------------------------------
+    // Phase 2: Prediction vs plant reality
+    // -----------------------------------------------------
             for (int i = 0; i < NX; i++) {
                 OSQPFloat ax = 0.0f, bu = 0.0f;
                 for (int j = 0; j < NX; j++) ax += Ad[i][j] * x_current[j];
@@ -277,7 +295,7 @@ int main(void) {
                 x_lin_pred[i] = ax + bu + d_lin[i];
             }
 
-        // Heun (RK2) plant simulation using crane_dynamics(); replace if plant changes
+    // Heun/RK2 plant propagation (nonlinear ground truth reference).
             OSQPFloat k1[NX], k2[NX], x_temp[NX];
             crane_dynamics(x_current, u_applied, k1);
             for (int i = 0; i < NX; i++) x_temp[i] = x_current[i] + DT * k1[i];
@@ -286,11 +304,16 @@ int main(void) {
 
             for (int i = 0; i < NX; i++) x_current[i] = x_next[i];
 
-        // -----------------------------------------------------
-        // Phase 3: CMoN Gatekeeper
-        // kappa = ||x_actual - x_lin_pred|| / (||x_lin_pred - x_prev|| + eps)
-        // If kappa > eta_pri -> rebuild Jacobians & Hessian, else reuse cached matrices
-        // -----------------------------------------------------
+    // -----------------------------------------------------
+    // Phase 3: Trigger and cadence gatekeeper
+    // -----------------------------------------------------
+    // kappa = ||x_actual - x_lin_pred|| / (||x_lin_pred - x_prev|| + eps)
+    // Decision priority:
+    //   A) Emergency trigger  -> force re-linearization now.
+    //   B) Active burst       -> continue forced consecutive updates.
+    //   C) Cooldown active    -> block re-trigger and reuse model.
+    //   D) Normal trigger     -> start a new forced burst.
+    // Result applies to matrix refresh below (for next solve step).
             OSQPFloat diff_num[NX];
             OSQPFloat diff_den[NX];
             for (int i = 0; i < NX; i++) {
@@ -324,7 +347,7 @@ int main(void) {
                 }
             }
 
-        // 5. Matrix and Vector Updates
+    // 4) Matrix refresh path: only when recompute_mats is enabled.
         if (recompute_mats) {
             linearization(x_current, u_applied, Ad, Bd, d_lin);
             calc_h_gradient(x_current, jacobian_H, h_val);
@@ -356,7 +379,8 @@ int main(void) {
             d_err[i] = ax + bu + d_lin[i] + Edist[i] - x_target[i];
         }*/
 
-        // Always update vectors
+    // 5) Vector update path: always updated every iteration.
+    //    (Bounds/linear terms depend on current state, even if matrices are reused.)
         #if FORMULATION == OPT_CONDENSED
             build_q(q, Ad, d_lin, Edist, x_current, x_target, A_pow, AB_mat, Q_diag, P_diag);
             build_bounds(&l, &u, Ad, d_lin, Edist, jacobian_H, h_val, x_current, x_min, x_max, u_min, u_max, A_pow);
@@ -400,7 +424,9 @@ int main(void) {
         for (int i = 0; i < NU; i++) printf(" %6.5f", u_applied[i]);
         printf("\n");
 
-        // 6. Warm Start
+        // 6) Warm-start policy:
+        //    - Recompute path: cold start (NULL) for robustness.
+        //    - Reuse path: shifted warm-start to accelerate convergence.
         if (recompute_mats) {
             osqp_warm_start(solver, NULL, NULL);
         } else {
@@ -452,6 +478,7 @@ int main(void) {
 
     printf("Solver time   -> total: %.4f ms, avg: %.4f ms\n", solver_total_ms, solver_avg_ms);
     printf("Iteration time-> total: %.4f ms, avg: %.4f ms\n", iter_total_ms, iter_avg_ms);
+    // Note: linearized_times includes the initial bootstrap linearization.
     printf("Linearizations performed: %lld out of %lld steps\n", linearized_times, steps_completed);
 
 
@@ -462,6 +489,7 @@ int main(void) {
     free(P->x); free(P->i); free(P->p);
     free(A->x); free(A->i); free(A->p);
     free(q); free(l); free(u);
+    free(zero_x); free(zero_y);
     free(settings);
 
     return 0;
