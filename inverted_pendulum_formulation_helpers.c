@@ -1,4 +1,4 @@
-#include "mpc_pipeline_formulation_helpers.h"
+#include "inverted_pendulum_formulation_helpers.h"
 #include "mpc_pipeline_helpers.h"
 
 #include <stdlib.h>
@@ -381,9 +381,25 @@ void build_bounds(OSQPFloat **l_ptr, OSQPFloat **u_ptr, const OSQPFloat x_curren
 #elif FORMULATION == OPT_SPARSE_CONDENSED
 
 void compute_sc_blocks(OSQPFloat Ad[NX][NX], OSQPFloat Bd[NX][NU], OSQPFloat jacobian_H[NH][NX], OSQPFloat K[NU][NX], OSQPFloat AK[NX][NX], OSQPFloat P_blocks[], OSQPFloat M_blocks[], OSQPFloat H_blocks[]) {
-    //OSQPFloat K_lqr[NU][NX] = {{-2.751, -5.650, 0.0, 0.0, 17.351, 3.499}, {0.0, 0.0, -4.760, -4.810, 0.0, 0.0}};
-    OSQPFloat K_lqr[NU][NX] = {{-3.0, -6.0, 0.0, 0.0, 19.0, 4.0}, {0.0, 0.0, -5.3, -5.4, 0.0, 0.0}};
-    for (OSQPInt i = 0; i < NU; i++) for (OSQPInt j = 0; j < NX; j++) K[i][j] = K_lqr[i][j];
+    
+    // 1. Automatically extract dt from the Ad matrix
+    OSQPFloat dt = Ad[0][1];
+    if (dt < 1e-6) dt = 1e-6; // Safety bounds to avoid division by zero
+    
+    // 2. Extract the dynamically mapped B-matrix coefficient
+    OSQPFloat b2 = Bd[1][0];
+    if (b2 > -1e-6 && b2 <= 0.0) b2 = -1e-6;
+    if (b2 < 1e-6 && b2 > 0.0) b2 = 1e-6;
+
+    // 3. Compute exact deadbeat gains directly from the discrete-time matrices
+    // This mathematically forces Trace = 0 and Determinant = 0 for (Ad + Bd*K)
+    OSQPFloat k0 = (-1.0 / dt - Ad[1][0]) / b2;
+    OSQPFloat k1 = (-1.0 - Ad[1][1]) / b2;
+
+    K[0][0] = k0;
+    K[0][1] = k1;
+
+    // 4. Proceed with standard Sparse Condensed matrix building
     for (OSQPInt i = 0; i < NX; i++) {
         for (OSQPInt j = 0; j < NX; j++) {
             OSQPFloat acc = 0.0;
@@ -391,18 +407,24 @@ void compute_sc_blocks(OSQPFloat Ad[NX][NX], OSQPFloat Bd[NX][NU], OSQPFloat jac
             AK[i][j] = Ad[i][j] + acc;
         }
     }
+    
     OSQPFloat AK_powers[R_BAND + 1][NX * NX];
     mat_eye(AK_powers[0], NX, NX);
     for (OSQPInt i = 1; i <= R_BAND; i++) mat_mul(AK_powers[i - 1], (OSQPFloat *)AK, AK_powers[i], NX, NX, NX);
+    
     OSQPFloat Bd_flat[NX * NU];
     for (OSQPInt i = 0; i < NX; i++) for (OSQPInt j = 0; j < NU; j++) Bd_flat[i * NU + j] = Bd[i][j];
-    for (OSQPInt i = 0; i < R_BAND; i++) mat_mul(AK_powers[i], Bd_flat, &P_blocks[i * NX * NU], NX, NX, NU);    mat_set(M_blocks, 0.0, (R_BAND + 1) * NU, NU);
+    
+    for (OSQPInt i = 0; i < R_BAND; i++) mat_mul(AK_powers[i + 1], Bd_flat, &P_blocks[i * NX * NU], NX, NX, NU);
+    mat_set(M_blocks, 0.0, (R_BAND + 1) * NU, NU);
     for (OSQPInt i = 0; i < NU; i++) M_blocks[i * NU + i] = 1.0;
+    
     for (OSQPInt i = 1; i <= R_BAND; i++) {
         OSQPFloat KAK[NU * NX];
         mat_mul((OSQPFloat *)K, AK_powers[i - 1], KAK, NU, NX, NX);
         mat_mul(KAK, Bd_flat, &M_blocks[i * NU * NU], NU, NX, NU);
     }
+    
     for (OSQPInt i = 1; i <= R_BAND; i++) {
         OSQPFloat CAK[NH * NX];
         mat_mul((OSQPFloat *)jacobian_H, AK_powers[i - 1], CAK, NH, NX, NX);

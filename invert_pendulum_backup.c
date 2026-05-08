@@ -23,12 +23,12 @@
  * --------------------------------------------------------- */
 #define NX 2    
 #define NU 1    
-#define N 50  
+#define N 20  
 #define ND  1    
 #define NH  0    
-#define DT 0.0200
-#define Tsim 5.0
-#define R_BAND 2
+#define DT 0.010 
+#define Tsim 11.0
+#define R_BAND 1 
 
 /* ---------------------------------------------------------
  * Formulation-Specific Dimensions
@@ -110,7 +110,7 @@ static void dynamics(const OSQPFloat x[NX], const OSQPFloat u[NU], OSQPFloat f_o
     const OSQPFloat m = 0.2f;
     const OSQPFloat b = 0.01f;
     f_out[0] = x[1];
-    f_out[1] = -(g/l)*x[0]-(b/(m*l*l))*x[1]+(1.0/(m*l*l))*u[0];
+    f_out[1] = -(g/l)*x[0]-(b/(m*l*l))*x[0]+(1.0/(m*l*l))*u[0];
 
 }
 
@@ -578,29 +578,9 @@ void build_bounds(OSQPFloat **l_ptr, OSQPFloat **u_ptr, const OSQPFloat x_curren
  * ========================================================= */
 #elif FORMULATION == OPT_SPARSE_CONDENSED
 
-
 void compute_sc_blocks(OSQPFloat Ad[NX][NX], OSQPFloat Bd[NX][NU], OSQPFloat jacobian_H[NH][NX], OSQPFloat K[NU][NX], OSQPFloat AK[NX][NX], OSQPFloat P_blocks[], OSQPFloat M_blocks[], OSQPFloat H_blocks[]) {
-
-    
-    
-    // 1. Automatically extract dt from the Ad matrix
-    OSQPFloat dt = Ad[0][1];
-    if (dt < 1e-6) dt = 1e-6; // Safety bounds to avoid division by zero
-    
-    // 2. Extract the dynamically mapped B-matrix coefficient
-    OSQPFloat b2 = Bd[1][0];
-    if (b2 > -1e-6 && b2 <= 0.0) b2 = -1e-6;
-    if (b2 < 1e-6 && b2 > 0.0) b2 = 1e-6;
-
-    // 3. Compute exact deadbeat gains directly from the discrete-time matrices
-    // This mathematically forces Trace = 0 and Determinant = 0 for (Ad + Bd*K)
-    OSQPFloat k0 = (-1.0 / dt - Ad[1][0]) / b2;
-    OSQPFloat k1 = (-1.0 - Ad[1][1]) / b2;
-
-    K[0][0] = k0;
-    K[0][1] = k1;
-
-    // 4. Proceed with standard Sparse Condensed matrix building
+    OSQPFloat K_lqr[NU][NX] = {{0.0, 0.0}};
+    for (OSQPInt i = 0; i < NU; i++) for (OSQPInt j = 0; j < NX; j++) K[i][j] = K_lqr[i][j];
     for (OSQPInt i = 0; i < NX; i++) {
         for (OSQPInt j = 0; j < NX; j++) {
             OSQPFloat acc = 0.0;
@@ -608,31 +588,25 @@ void compute_sc_blocks(OSQPFloat Ad[NX][NX], OSQPFloat Bd[NX][NU], OSQPFloat jac
             AK[i][j] = Ad[i][j] + acc;
         }
     }
-    
     OSQPFloat AK_powers[R_BAND + 1][NX * NX];
     mat_eye(AK_powers[0], NX, NX);
     for (OSQPInt i = 1; i <= R_BAND; i++) mat_mul(AK_powers[i - 1], (OSQPFloat *)AK, AK_powers[i], NX, NX, NX);
-    
     OSQPFloat Bd_flat[NX * NU];
     for (OSQPInt i = 0; i < NX; i++) for (OSQPInt j = 0; j < NU; j++) Bd_flat[i * NU + j] = Bd[i][j];
-    
-    for (OSQPInt i = 0; i < R_BAND; i++) mat_mul(AK_powers[i], Bd_flat, &P_blocks[i * NX * NU], NX, NX, NU);    mat_set(M_blocks, 0.0, (R_BAND + 1) * NU, NU);
-    for (OSQPInt i = 0; i < NU; i++) M_blocks[i * NU + i] = 1.0;
-    
+    for (OSQPInt i = 0; i < R_BAND; i++) mat_mul(AK_powers[i + 1], Bd_flat, &P_blocks[i * NX * NU], NX, NX, NU);
+    mat_set(M_blocks, 0.0, (R_BAND + 1) * NU, NU);
+    for (OSQPInt i = 0; i < NU; i++) M_blocks[i * NU + i] = 1.0; 
     for (OSQPInt i = 1; i <= R_BAND; i++) {
         OSQPFloat KAK[NU * NX];
         mat_mul((OSQPFloat *)K, AK_powers[i - 1], KAK, NU, NX, NX);
         mat_mul(KAK, Bd_flat, &M_blocks[i * NU * NU], NU, NX, NU);
     }
-    
     for (OSQPInt i = 1; i <= R_BAND; i++) {
         OSQPFloat CAK[NH * NX];
         mat_mul((OSQPFloat *)jacobian_H, AK_powers[i - 1], CAK, NH, NX, NX);
         mat_mul(CAK, Bd_flat, &H_blocks[(i - 1) * NH * NU], NH, NX, NU);
     }
 }
-
-
 
 OSQPCscMatrix* build_P(const OSQPFloat Q_diag[NX], const OSQPFloat R_diag[NU], const OSQPFloat P_diag[NX], const OSQPFloat K[NU][NX], const OSQPFloat P_blocks[], const OSQPFloat M_blocks[], const OSQPFloat e_free[][NX], OSQPFloat q[], OSQPCscMatrix *P_existing, OSQPInt r_local, OSQPInt recompute_hessian) {
     OSQPInt setup = (P_existing == NULL);
@@ -775,24 +749,24 @@ int main(void) {
     OSQPFloat x_lin_pred[NX] = {0};
     OSQPInt linearized_times = 1;
     OSQPFloat d_est[ND] = {0.0};
-    const OSQPFloat E[NX][ND] = {{0.00277189},
+    const OSQPFloat E[NX][ND] = {
+                                {0.00277189},
                                 {0.55371331}};
     
-    
     // --- Cost Weights ---
-    const OSQPFloat Q_diag[NX] = {50.0 * DT, 10.0 * DT}; 
-    const OSQPFloat R_diag[NU] = {100.0 * DT};      
-    const OSQPFloat P_diag[NX] = {1000.0 , 100.0}; 
+    const OSQPFloat Q_diag[NX] = {50.0*DT, 10.0*DT}; 
+    const OSQPFloat R_diag[NU] = {100.0*DT};      
+    const OSQPFloat P_diag[NX] = {1000.0, 100.0};
 
     // --- Setpoints & Bounds ---
-    OSQPFloat x_current[NX] = {1.0,1.0};//initial point
-    OSQPFloat x_target[NX] = { 0.0 ,0.0};//target point
+    OSQPFloat x_current[NX] = {0.0,0.0};//initial point
+    OSQPFloat x_target[NX] = { 3.1415926,0.0};//target point
     OSQPFloat u_applied[NU] = {0.0};
     OSQPFloat u_target[NU] = {0.0};
 
     const OSQPFloat x_min[NX] = {-10.0, -10.0};
     const OSQPFloat x_max[NX] = { 10.0,  10.0};
-    const OSQPFloat u_min[NU] = {-3.0};
+    const OSQPFloat u_min[NU] = {-1.0};
     const OSQPFloat u_max[NU] = { 3.0};
     linearization(x_current, u_applied, Ad, Bd, d_lin);
     calc_h_gradient(x_current, jacobian_H, h_val);
@@ -826,21 +800,19 @@ int main(void) {
 
 
 
-    const OSQPFloat eta_pri = 1000.0; // CMoN Gatekeeper Tolerance
-
-
+    const OSQPFloat eta_pri = 100.0; // CMoN Gatekeeper Tolerance
     #if FORMULATION == OPT_CONDENSED
         build_AB(Ad, Bd, A_pow, AB_mat);
         P = build_P(NULL, AB_mat, Q_diag, R_diag, P_diag);
-        q = build_q(NULL, Ad, d_lin, Edist, x_current, x_target, A_pow, AB_mat, Q_diag, P_diag);
-        A = build_A(NULL, AB_mat, jacobian_H);
-        build_bounds(&l, &u, Ad, d_lin, Edist, jacobian_H, h_val, x_current, x_min, x_max, u_min, u_max, A_pow);
+    q = build_q(NULL, Ad, d_lin, Edist, x_current, x_target, A_pow, AB_mat, Q_diag, P_diag);
+    A = build_A(NULL, AB_mat, jacobian_H);
+    build_bounds(&l, &u, Ad, d_lin, Edist, jacobian_H, h_val, x_current, x_min, x_max, u_min, u_max, A_pow);
 
     #elif FORMULATION == OPT_NON_CONDENSED
         P = build_P(Q_diag, R_diag, P_diag); // Constant
         q = build_q(x_target, u_target, Q_diag, R_diag, P_diag); // Constant for fixed target
         A = build_A(NULL, Ad, Bd, jacobian_H);
-        build_bounds(&l, &u, x_current, jacobian_H, h_val, d_lin, Edist, x_min, x_max, u_min, u_max);
+    build_bounds(&l, &u, x_current, jacobian_H, h_val, d_lin, Edist, x_min, x_max, u_min, u_max);
     #elif FORMULATION == OPT_SPARSE_CONDENSED
         
         compute_sc_blocks(Ad, Bd, jacobian_H, K, AK, P_blocks, M_blocks, H_blocks);
@@ -891,34 +863,34 @@ int main(void) {
     OSQPSettings *settings = (OSQPSettings *)malloc(sizeof(OSQPSettings));
     osqp_set_default_settings(settings);
     #if FORMULATION == OPT_CONDENSED
-        settings->adaptive_rho = 1.0;
-        //settings->check_termination = 1;//exit immediately when hit accurarcy target
+        settings->adaptive_rho = 1;
+        settings->check_termination = 1;//exit immediately when hit accurarcy target
         settings->eps_abs = 1e-3; 
         settings->eps_rel = 1e-3;
-        settings->alpha = 1.0;
-        //settings->adaptive_rho_interval = 1;
+        settings->alpha = 1.6;
+        settings->adaptive_rho_interval = 1;
         settings->warm_starting = 1;
-        settings->max_iter = 50;
+        settings->max_iter = 10000;
         settings->verbose = 0;
-        //settings->scaling = 0;//no scaling since stacking already condensed
+        settings->scaling = 0;//no scaling since stacking already condensed
     #elif FORMULATION == OPT_NON_CONDENSED
-        settings->alpha = 1.0;//too loose will fail for stabilize to unstable equilibrium
-        //settings->scaling= 10;
+        settings->alpha = 1.0;
+        settings->scaling= 10;
         settings->verbose = 0;
         settings->adaptive_rho = 1;
-        //settings->check_termination = 1;
-        settings->max_iter = 50;//make sure is not reached for 100% solved
+        settings->check_termination = 5;
+        settings->max_iter = 10000;//make sure is not reached for 100% solved
         settings->warm_starting = 1;//default for grampc
-        settings->eps_abs = 1e-3;
-        settings->eps_rel = 1e-3;
+        settings->eps_abs = 5e-3;
+        settings->eps_rel = 5e-3;
 
     #elif FORMULATION == OPT_SPARSE_CONDENSED
         settings->alpha = 1.0;      // higher relaxation for faster convergence
-        //settings->scaling= 50;      // stronger scaling to improve conditioning
+        settings->scaling= 0;      // stronger scaling to improve conditioning
         settings->verbose = 0;
         settings->adaptive_rho = 1;
-        //settings->check_termination = 1;
-        settings->max_iter = 50;//make sure is not reached for 100% solved
+        settings->check_termination = 1;
+        settings->max_iter = 10000;//make sure is not reached for 100% solved
         settings->warm_starting = 1;//default for grampc
         settings->eps_abs = 1e-3;   // slightly looser tolerances to aid feasibility
         settings->eps_rel = 1e-3;
@@ -966,9 +938,9 @@ int main(void) {
 
     for (int step = 0; step < MAX_STEPS; step++) {
 
-        /*if(step%400==0&&step>0){
+        if(step%400==0&&step>0){
             x_current[1] += 0.1;//disturbance at step 50, should trigger CMoN update
-        }*/
+        }
 
         
 
@@ -1077,8 +1049,8 @@ int main(void) {
 
         // Always update vectors
         #if FORMULATION == OPT_CONDENSED
-            build_q(q, Ad, d_lin, Edist, x_current, x_target, A_pow, AB_mat, Q_diag, P_diag);
-            build_bounds(&l, &u, Ad, d_lin, Edist, jacobian_H, h_val, x_current, x_min, x_max, u_min, u_max, A_pow);
+            build_q(q, Ad, d_lin, x_current, x_target, A_pow, AB_mat, Q_diag, P_diag);
+            build_bounds(&l, &u, Ad, d_lin, jacobian_H, h_val, x_current, x_min, x_max, u_min, u_max, A_pow);
         #elif FORMULATION == OPT_NON_CONDENSED
             // q is constant (-Q * x_target). Only bounds change based on current state.
             build_bounds(&l, &u, x_current, jacobian_H, h_val, d_lin, Edist, x_min, x_max, u_min, u_max);
@@ -1120,23 +1092,21 @@ int main(void) {
         printf("\n");
 
         // 6. Warm Start
-        if(recompute_mats==0) {
-            #if FORMULATION == OPT_CONDENSED || FORMULATION == OPT_SPARSE_CONDENSED
-                for (int idx = 0; idx < n_vars - NU; idx++) z_warm[idx] = solver->solution->x[idx + NU];
-                for (int idx = n_vars - NU; idx < n_vars; idx++) z_warm[idx] = 0.0f;
-                osqp_warm_start(solver, z_warm, NULL);
-            #elif FORMULATION == OPT_NON_CONDENSED
-                OSQPInt stride = NX + NU;
-                for (int k = 0; k < N - 1; k++) {
-                    for (int i = 0; i < NX; i++) z_warm[k * stride + i] = solver->solution->x[(k + 1) * stride + i];
-                    for (int i = 0; i < NU; i++) z_warm[k * stride + NX + i] = solver->solution->x[(k + 1) * stride + NX + i];
-                }
-                for (int i = 0; i < NX; i++) z_warm[(N - 1) * stride + i] = solver->solution->x[N * stride + i];
-                for (int i = 0; i < NU; i++) z_warm[(N - 1) * stride + NX + i] = solver->solution->x[(N - 1) * stride + NX + i];
-                for (int i = 0; i < NX; i++) z_warm[N * stride + i] = solver->solution->x[N * stride + i];
-                osqp_warm_start(solver, z_warm, NULL);
-            #endif
-        }
+        #if FORMULATION == OPT_CONDENSED || FORMULATION == OPT_SPARSE_CONDENSED
+            for (int idx = 0; idx < n_vars - NU; idx++) z_warm[idx] = solver->solution->x[idx + NU];
+            for (int idx = n_vars - NU; idx < n_vars; idx++) z_warm[idx] = 0.0f;
+            osqp_warm_start(solver, z_warm, NULL);
+        #elif FORMULATION == OPT_NON_CONDENSED
+            OSQPInt stride = NX + NU;
+            for (int k = 0; k < N - 1; k++) {
+                for (int i = 0; i < NX; i++) z_warm[k * stride + i] = solver->solution->x[(k + 1) * stride + i];
+                for (int i = 0; i < NU; i++) z_warm[k * stride + NX + i] = solver->solution->x[(k + 1) * stride + NX + i];
+            }
+            for (int i = 0; i < NX; i++) z_warm[(N - 1) * stride + i] = solver->solution->x[N * stride + i];
+            for (int i = 0; i < NU; i++) z_warm[(N - 1) * stride + NX + i] = solver->solution->x[(N - 1) * stride + NX + i];
+            for (int i = 0; i < NX; i++) z_warm[N * stride + i] = solver->solution->x[N * stride + i];
+            osqp_warm_start(solver, z_warm, NULL);
+        #endif
 
         timer_now(&iter_end);
         OSQPFloat iter_dur_ms = timer_diff_ms(&iter_start, &iter_end);
@@ -1171,23 +1141,6 @@ int main(void) {
     printf("Iteration time-> total: %.4f ms, avg: %.4f ms\n", iter_total_ms, iter_avg_ms);
     printf("Linearizations performed: %lld out of %lld steps\n", linearized_times, steps_completed);
 
-    // Calculate final true cost of objective function
-    OSQPFloat final_cost = 0.0;
-    // The final state is x_current after the loop
-    // In OSQP, Q and R diagonals are pre-multiplied by DT. We must divide by DT
-    // to compare fairly against GRAMPC's raw penalty scale.
-    for (int i = 0; i < NX; i++) {
-        OSQPFloat err_x = x_current[i] - x_target[i];
-        final_cost += err_x * (Q_diag[i] / DT) * err_x + err_x * P_diag[i] * err_x;
-    }
-    for (int i = 0; i < NU; i++) {
-        OSQPFloat err_u = u_applied[i] - u_target[i];
-        final_cost += err_u * (R_diag[i] / DT) * err_u;
-    }
-
-    printf("Final End Cost (Raw)   -> %.3f\n", (double)final_cost);
-    printf("Final End Cost (log10) -> %.3f\n", (final_cost > 0) ? log10((double)final_cost) : -99.0);
-    printf("%.3f/%.3f/%.3f\n\n", solver_avg_ms,iter_avg_ms,(final_cost > 0) ? log10((double)final_cost) : -99.0);
 
     fclose(f_out);
 

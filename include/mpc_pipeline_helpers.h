@@ -30,4 +30,8 @@ void crane_dynamics(const OSQPFloat x[6], const OSQPFloat u[2], OSQPFloat f_out[
 void calc_h_gradient(const OSQPFloat x_current[6], OSQPFloat jacobian_H[3][6], OSQPFloat h_val[3]);
 void linearization(OSQPFloat x_current[6], OSQPFloat u_applied[2], OSQPFloat Ad[6][6], OSQPFloat Bd[6][2], OSQPFloat d_lin[6]);
 
+void pend_dynamics(const OSQPFloat x[2], const OSQPFloat u[1], OSQPFloat f_out[2]);
+void pend_calc_h_gradient(const OSQPFloat x_current[2], OSQPFloat *jacobian_H, OSQPFloat *h_val, int nh);
+void pend_linearization(OSQPFloat x_current[2], OSQPFloat u_applied[1], OSQPFloat Ad[2][2], OSQPFloat Bd[2][1], OSQPFloat d_lin[2], OSQPFloat dt);
+
 #endif

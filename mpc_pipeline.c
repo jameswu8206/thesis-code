@@ -6,7 +6,7 @@
 #include "mpc_pipeline_config.h"
 #include "mpc_pipeline_helpers.h"
 #include "mpc_pipeline_formulation_helpers.h"
-
+//place to modify: initial conditions in below;pipeline_config;pipeline_helpers.c;
 // Expose dimensions as variables for OSQP setup
 OSQPInt n_vars = N_VARS;
 OSQPInt n_cons = N_CONS;
@@ -45,13 +45,15 @@ int main(void) {
                                 {0.0, 0.0, 0.0, 0.0, 0.0, 1.0},};
     
     // --- Cost Weights ---
-    const OSQPFloat Q_diag[NX] = {1.0*DT, 2.0*DT, 2.0*DT, 1.0*DT, 1.0*DT, 4.0*DT}; 
+    const OSQPFloat Q_diag[NX] = {1.0*DT, 2.0*DT, 2.0*DT, 1.0*DT, 1.0*DT, 4.0*DT};
     const OSQPFloat R_diag[NU] = {0.05*DT, 0.05*DT};      
     const OSQPFloat P_diag[NX] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 
     // --- Setpoints & Bounds ---
-    OSQPFloat x_current[NX] = { -2.0, 0.0, 1.0, -0.5, 0.0, 0.0 };//initial point
+    OSQPFloat x_current[NX] = { -2.0, 0.0, 2.0, 0.0, 0.25, 0.25};//initial point
     OSQPFloat x_target[NX] = { 2.0, 0.0, 2.0, 0.0, 0.0, 0.0 };//target point
+    //OSQPFloat x_current[NX] = { 2.0, 0.0, 2.0, 0.0, 0.25, 0.25 };
+    //OSQPFloat x_target[NX] = { -2.0, 0.0, 2.0, 0.0, 0.25, 0.25 };
     OSQPFloat u_applied[NU] = {0.0, 0.0};
     OSQPFloat u_target[NU] = {0.0, 0.0};
 
@@ -167,38 +169,39 @@ int main(void) {
     OSQPSettings *settings = (OSQPSettings *)malloc(sizeof(OSQPSettings));
     osqp_set_default_settings(settings);
     #if FORMULATION == OPT_CONDENSED
+        settings->alpha = 1.3;      // higher relaxation for faster convergence
         settings->adaptive_rho = 1;
-        settings->check_termination = 1;//exit immediately when hit accurarcy target
-        settings->eps_abs = 1e-3; 
-        settings->eps_rel = 1e-3;
-        settings->alpha = 1.6;
-        settings->adaptive_rho_interval = 1;
+        //settings->check_termination = 100;//exit immediately when hit accurarcy target
+        settings->eps_abs = 1e-5; 
+        settings->eps_rel = 1e-5;
         settings->warm_starting = 1;
-        settings->max_iter = 10000;
+        settings->max_iter = MAXITER;
         settings->verbose = 0;
-        settings->scaling = 0;//no scaling since stacking already condensed
+        settings->scaling = 0;
+        //settings->polishing = 1;
     #elif FORMULATION == OPT_NON_CONDENSED
-        settings->alpha = 1.0;
-        settings->scaling= 10;
+        settings->alpha = 1.4;
+        //settings->scaling = 5;
+        settings->check_termination = 1;//exit immediately when hit accurarcy target
         settings->verbose = 0;
         settings->adaptive_rho = 1;
-        settings->check_termination = 5;
-        settings->max_iter = 10000;//make sure is not reached for 100% solved
         settings->warm_starting = 1;//default for grampc
-        settings->eps_abs = 5e-3;
-        settings->eps_rel = 5e-3;
-
+        settings->eps_abs = 1e-5;
+        settings->eps_rel = 1e-5;
+        settings->max_iter = MAXITER;
+        //settings->scaling = 1;
+        //settings->polishing = 1;
     #elif FORMULATION == OPT_SPARSE_CONDENSED
-        settings->alpha = 1.6;      // higher relaxation for faster convergence
-        settings->scaling= 0;      // stronger scaling to improve conditioning
+        settings->alpha = 1.4;      // higher relaxation for faster convergence
         settings->verbose = 0;
         settings->adaptive_rho = 1;
-        settings->check_termination = 1;
-        settings->max_iter = 10000;//make sure is not reached for 100% solved
+        settings->max_iter = MAXITER;//make sure is not reached for 100% solved
+        settings->check_termination = 1;//exit immediately when hit accurarcy target
         settings->warm_starting = 1;//default for grampc
-        settings->eps_abs = 1e-3;   // slightly looser tolerances to aid feasibility
-        settings->eps_rel = 1e-3;
-    
+        settings->eps_abs = 1e-5;   // slightly looser tolerances to aid feasibility
+        settings->eps_rel = 1e-5;
+        //settings->scaling = 1;
+        //settings->polishing = 1;
     #endif
 
     OSQPSolver *solver;
@@ -207,6 +210,7 @@ int main(void) {
         printf("OSQP setup failed (code %lld)\n", (long long)setup_status);
         return 1;
     }
+    
 
     // --- Simulation Loop ---
     // Each loop iteration performs one closed-loop MPC step.
@@ -243,11 +247,12 @@ int main(void) {
     // Reserved buffers for optional explicit cold-start strategies.
     OSQPFloat *zero_x = (OSQPFloat *)calloc(n_vars, sizeof(OSQPFloat));
     OSQPFloat *zero_y = (OSQPFloat *)calloc(n_cons, sizeof(OSQPFloat));
+    
+    OSQPInt loopcounter = 0;
+    
+    
+    
     for (int step = 0; step < MAX_STEPS; step++) {
-
-
-
-        
 
     // -----------------------------------------------------
     // Phase 1: Solve using currently cached QP matrices
@@ -259,11 +264,22 @@ int main(void) {
         OSQPFloat solver_dur_ms = timer_diff_ms(&solver_start, &solver_end);
         solver_total_ms += solver_dur_ms;
 
-        if (solver->info->status_val != OSQP_SOLVED &&
-            solver->info->status_val != OSQP_SOLVED_INACCURATE &&
-            solver->info->status_val != OSQP_MAX_ITER_REACHED) {
-            printf("Solver failed! status=%d (%s)\n", (int)solver->info->status_val, solver->info->status);
+        
+
+        OSQPInt status = solver->info->status_val;
+
+        if (status != OSQP_SOLVED &&
+            status != OSQP_SOLVED_INACCURATE &&
+            status != OSQP_MAX_ITER_REACHED) {
+            printf("Solver failed! status=%d (%s)\n",
+                (int)status,
+                solver->info->status);
+            osqp_warm_start(solver, zero_x, zero_y);
             break;
+        }
+
+        if (status == OSQP_MAX_ITER_REACHED) {
+            printf("Warning: max_iter reached at step %d, continuing.\n", step);
         }
 
     // 2) Extract first control action from optimal decision vector.
@@ -326,6 +342,7 @@ int main(void) {
             OSQPInt kappa_trigger = (kappa > eta_pri);
             OSQPInt emergency_trigger = (kappa > emergency_kappa);
             OSQPInt recompute_mats = 0;
+            
 
             if (emergency_trigger) {
                 recompute_mats = 1;
@@ -427,9 +444,7 @@ int main(void) {
         // 6) Warm-start policy:
         //    - Recompute path: cold start (NULL) for robustness.
         //    - Reuse path: shifted warm-start to accelerate convergence.
-        if (recompute_mats) {
-            osqp_warm_start(solver, NULL, NULL);
-        } else {
+        if(recompute_mats==0){
             #if FORMULATION == OPT_CONDENSED || FORMULATION == OPT_SPARSE_CONDENSED
                 for (int idx = 0; idx < n_vars - NU; idx++) z_warm[idx] = solver->solution->x[idx + NU];
                 for (int idx = n_vars - NU; idx < n_vars; idx++) z_warm[idx] = 0.0f;
@@ -467,6 +482,17 @@ int main(void) {
         }
         printf("\n");
 
+        // Check for early exit if solution quality reached desired value
+        OSQPFloat current_cost = 0.0f;
+        for (int i = 0; i < NX; i++) {
+            OSQPFloat err_x = x_current[i] - x_target[i];
+            current_cost += err_x * (Q_diag[i] / DT) * err_x + err_x * P_diag[i] * err_x;
+        }
+        for (int i = 0; i < NU; i++) {
+            OSQPFloat err_u = u_applied[i] - u_target[i];
+            current_cost += err_u * (R_diag[i] / DT) * err_u;
+        }
+        
     }
     
     
@@ -476,10 +502,26 @@ int main(void) {
         iter_avg_ms   = iter_total_ms   / steps_completed;
     }
 
-    printf("Solver time   -> total: %.4f ms, avg: %.4f ms\n", solver_total_ms, solver_avg_ms);
-    printf("Iteration time-> total: %.4f ms, avg: %.4f ms\n", iter_total_ms, iter_avg_ms);
+    // Calculate final true cost of objective function
+    OSQPFloat final_cost = 0.0f;
+    for (int i = 0; i < NX; i++) {
+        OSQPFloat err_x = x_current[i] - x_target[i];
+        final_cost += err_x * (Q_diag[i] / DT) * err_x + err_x * P_diag[i] * err_x;
+    }
+    for (int i = 0; i < NU; i++) {
+        OSQPFloat err_u = u_applied[i] - u_target[i];
+        final_cost += err_u * (R_diag[i] / DT) * err_u;
+    }
+
+    printf("Actual Tsim   -> %.3f s\n", (double)(steps_completed * DT));
+    printf("Solver time   -> total: %.3f ms, avg: %.3f ms\n", solver_total_ms, solver_avg_ms);
+    printf("Iteration time-> total: %.3f ms, avg: %.3f ms\n", iter_total_ms, iter_avg_ms);
+    printf("Final End Cost (Raw)   -> %.3e\n", (double)final_cost);
+    printf("Final End Cost (log10) -> %.3f\n", (final_cost > 0) ? log10((double)final_cost) : -99.0);
     // Note: linearized_times includes the initial bootstrap linearization.
-    printf("Linearizations performed: %lld out of %lld steps\n", linearized_times, steps_completed);
+    printf("Linearizations performed: %lld out of %lld steps\n\n", linearized_times, steps_completed);
+    printf("%.3f/%.3f/%.3f\n\n", solver_avg_ms,iter_avg_ms,(final_cost > 0) ? log10((double)final_cost) : -99.0);
+    
 
 
     fclose(f_out);

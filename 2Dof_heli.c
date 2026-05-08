@@ -21,14 +21,14 @@
 /* ---------------------------------------------------------
  * Problem Constants & Parameters
  * --------------------------------------------------------- */
-#define NX 2    
-#define NU 1    
-#define N 50  
-#define ND  1    
-#define NH  0    
-#define DT 0.0200
+#define NX 4    // 4 States: Pitch, Yaw, Pitch_dot, Yaw_dot
+#define NU 2    // 2 Inputs: Pitch voltage, Yaw voltage
+#define N 40    // Adjust based on your benchmark scope (e.g., 10, 20, 40)
+#define ND 1    
+#define NH 0    // No nonlinear constraints needed; handled natively via box bounds
+#define DT 0.0250 // 50ms sampling time
 #define Tsim 5.0
-#define R_BAND 2
+#define R_BAND 4
 
 /* ---------------------------------------------------------
  * Formulation-Specific Dimensions
@@ -99,42 +99,81 @@ static void mat_set(OSQPFloat *A, OSQPFloat v, OSQPInt rows, OSQPInt cols) {
 }
 
 
-/* =========================================================
- * PHYSICS & MATH MODELS (Shared)
- * ========================================================= */
+
+// --- Helicopter Physical Constants (Replace with your exact lab parameters) ---
+const OSQPFloat m   = 1.3872;  // Total mass
+const OSQPFloat l   = 0.186;   // Center of mass length
+const OSQPFloat g   = 9.81;    // Gravity
+const OSQPFloat Jp  = 0.0384;  // Jeq_p: Pitch equivalent inertia
+const OSQPFloat Jy  = 0.0432;  // Jeq_y: Yaw equivalent inertia
+const OSQPFloat Kpp = 0.204;   // Torque constant pitch
+const OSQPFloat Kpy = 0.0068;  // Cross-torque pitch
+const OSQPFloat Kyp = 0.0219;  // Cross-torque yaw
+const OSQPFloat Kyy = 0.072;   // Torque constant yaw
+const OSQPFloat Bp  = 0.800;   // Damping pitch
+const OSQPFloat By  = 0.318;   // Damping yaw
 static void dynamics(const OSQPFloat x[NX], const OSQPFloat u[NU], OSQPFloat f_out[NX]) {
+    // x[0] = Pitch (theta), x[1] = Yaw (psi)
+    // x[2] = Pitch_dot,     x[3] = Yaw_dot
+    
+    
+    OSQPFloat sx = sin(x[0]);
+    OSQPFloat cx = cos(x[0]);
 
+    OSQPFloat Dp = Jp + m * l * l;
+    OSQPFloat Dy = Jy + m * l * l * (cx * cx);
 
-    const OSQPFloat g = 9.81f;
-    const OSQPFloat l = 0.3f;
-    const OSQPFloat m = 0.2f;
-    const OSQPFloat b = 0.01f;
-    f_out[0] = x[1];
-    f_out[1] = -(g/l)*x[0]-(b/(m*l*l))*x[1]+(1.0/(m*l*l))*u[0];
-
+    f_out[0] = x[2];
+    f_out[1] = x[3];
+    f_out[2] = (Kpp * u[0] + Kpy * u[1] - Bp * x[2] - m * g * l * cx - m * l * l * sx * cx * x[3] * x[3]) / Dp;
+    f_out[3] = (Kyp * u[0] + Kyy * u[1] - By * x[3] + 2.0 * m * l * l * sx * cx * x[2] * x[3]) / Dy;
 }
 
 void calc_h_gradient(const OSQPFloat x_current[NX], OSQPFloat jacobian_H[NH][NX], OSQPFloat h_val[NH]) {
-
-
-    h_val[0] = 0;
-
-    for(int j=0; j<NH; j++) for(int i=0; i<NX; i++) jacobian_H[j][i] = 0.0;
+    // NH is 0. Left empty as constraints are handled via box bounds.
 }
 
 void linearization(OSQPFloat x_current[NX], OSQPFloat u_applied[NU], OSQPFloat Ad[NX][NX], OSQPFloat Bd[NX][NU], OSQPFloat d_lin[NX]) {
-
-    const OSQPFloat g = 9.81f;
-    const OSQPFloat l = 0.3f;
-    const OSQPFloat m = 0.2f;
-    const OSQPFloat b = 0.01f;
-    OSQPFloat Ac[NX][NX] = {
-        {0.0, 1.0}, 
-        {-g/l, -(b/(m*l*l))}};
-
-    OSQPFloat Bc[NX][NU] = {
-        {0.0}, {1.0/(m*l*l)}};
     
+    OSQPFloat Ac[NX][NX] = {0};
+    OSQPFloat Bc[NX][NU] = {0};
+
+    OSQPFloat sx = sin(x_current[0]);
+    OSQPFloat cx = cos(x_current[0]);
+    OSQPFloat s2x = 2.0 * sx * cx; 
+    OSQPFloat c2x = cx * cx - sx * sx;
+
+    OSQPFloat Dp = Jp + m * l * l;
+    OSQPFloat Dy = Jy + m * l * l * (cx * cx);
+    
+    // Numerator for f4 (Yaw dot dynamics)
+    OSQPFloat Ny = Kyp * u_applied[0] + Kyy * u_applied[1] - By * x_current[3] + 2.0 * m * l * l * sx * cx * x_current[2] * x_current[3];
+
+    // Derivatives of Dy and Ny w.r.t x[0]
+    OSQPFloat dDy_dx0 = -2.0 * m * l * l * sx * cx;
+    OSQPFloat dNy_dx0 = 2.0 * m * l * l * c2x * x_current[2] * x_current[3];
+
+    // --- Compute Continuous Jacobian Ac = df/dx ---
+    Ac[0][2] = 1.0;
+    Ac[1][3] = 1.0;
+    
+    // df3/dx
+    Ac[2][0] = (m * g * l * sx - m * l * l * c2x * x_current[3] * x_current[3]) / Dp;
+    Ac[2][2] = -Bp / Dp;
+    Ac[2][3] = (-2.0 * m * l * l * sx * cx * x_current[3]) / Dp;
+
+    // df4/dx (Quotient Rule)
+    Ac[3][0] = (dNy_dx0 * Dy - Ny * dDy_dx0) / (Dy * Dy);
+    Ac[3][2] = (2.0 * m * l * l * sx * cx * x_current[3]) / Dy;
+    Ac[3][3] = (-By + 2.0 * m * l * l * sx * cx * x_current[2]) / Dy;
+
+    // --- Compute Continuous Input Jacobian Bc = df/du ---
+    Bc[2][0] = Kpp / Dp;
+    Bc[2][1] = Kpy / Dp;
+    Bc[3][0] = Kyp / Dy;
+    Bc[3][1] = Kyy / Dy;
+
+    // --- Discretization (Forward Euler) & Affine Term ---
     OSQPFloat fc[NX];
     dynamics(x_current, u_applied, fc);
 
@@ -148,10 +187,10 @@ void linearization(OSQPFloat x_current[NX], OSQPFloat u_applied[NU], OSQPFloat A
             Bd[i][j] = Bc[i][j] * DT;
             Bc_u += Bc[i][j] * u_applied[j];
         }
+        // Compute linearization offset error (d_lin)
         d_lin[i] = DT * (fc[i] - Ac_x - Bc_u);
     }
 }
-
 
 /* =========================================================
  * FORMULATION 0: STANDARD CONDENSED
@@ -580,60 +619,71 @@ void build_bounds(OSQPFloat **l_ptr, OSQPFloat **u_ptr, const OSQPFloat x_curren
 
 
 void compute_sc_blocks(OSQPFloat Ad[NX][NX], OSQPFloat Bd[NX][NU], OSQPFloat jacobian_H[NH][NX], OSQPFloat K[NU][NX], OSQPFloat AK[NX][NX], OSQPFloat P_blocks[], OSQPFloat M_blocks[], OSQPFloat H_blocks[]) {
-
     
-    
-    // 1. Automatically extract dt from the Ad matrix
-    OSQPFloat dt = Ad[0][1];
-    if (dt < 1e-6) dt = 1e-6; // Safety bounds to avoid division by zero
-    
-    // 2. Extract the dynamically mapped B-matrix coefficient
-    OSQPFloat b2 = Bd[1][0];
-    if (b2 > -1e-6 && b2 <= 0.0) b2 = -1e-6;
-    if (b2 < 1e-6 && b2 > 0.0) b2 = 1e-6;
+    /* 
+     * AGGRESSIVE LQR GAIN FOR 2-DOF HELICOPTER (Ts = 0.05s)
+     * Tuned to damp the prediction matrices without causing numeric overflow in OSQP.
+     * K[0] -> Pitch Voltage
+     * K[1] -> Yaw Voltage
+     */
+    //OSQPFloat K_lqr[NU][NX] = {{-156.38, -1.70, -12.27, 0.08},{19.49, -147.39, 1.76, -19.39}};
+    OSQPFloat K_lqr[NU][NX] = {{-160, -2.0, -13.0, 0.1},{20.0, -150.5, 2.0, -20.0}};
 
-    // 3. Compute exact deadbeat gains directly from the discrete-time matrices
-    // This mathematically forces Trace = 0 and Determinant = 0 for (Ad + Bd*K)
-    OSQPFloat k0 = (-1.0 / dt - Ad[1][0]) / b2;
-    OSQPFloat k1 = (-1.0 - Ad[1][1]) / b2;
+    // 1. Assign K and compute closed-loop matrix AK = Ad + Bd*K
+    for (OSQPInt i = 0; i < NU; i++) {
+        for (OSQPInt j = 0; j < NX; j++) {
+            K[i][j] = K_lqr[i][j];
+        }
+    }
 
-    K[0][0] = k0;
-    K[0][1] = k1;
-
-    // 4. Proceed with standard Sparse Condensed matrix building
     for (OSQPInt i = 0; i < NX; i++) {
         for (OSQPInt j = 0; j < NX; j++) {
             OSQPFloat acc = 0.0;
-            for (OSQPInt c = 0; c < NU; c++) acc += Bd[i][c] * K[c][j];
+            for (OSQPInt c = 0; c < NU; c++) {
+                acc += Bd[i][c] * K[c][j];
+            }
             AK[i][j] = Ad[i][j] + acc;
         }
     }
     
+    // 2. Compute powers of AK
     OSQPFloat AK_powers[R_BAND + 1][NX * NX];
     mat_eye(AK_powers[0], NX, NX);
-    for (OSQPInt i = 1; i <= R_BAND; i++) mat_mul(AK_powers[i - 1], (OSQPFloat *)AK, AK_powers[i], NX, NX, NX);
+    for (OSQPInt i = 1; i <= R_BAND; i++) {
+        mat_mul(AK_powers[i - 1], (OSQPFloat *)AK, AK_powers[i], NX, NX, NX);
+    }
     
+    // 3. Flatten Bd
     OSQPFloat Bd_flat[NX * NU];
-    for (OSQPInt i = 0; i < NX; i++) for (OSQPInt j = 0; j < NU; j++) Bd_flat[i * NU + j] = Bd[i][j];
+    for (OSQPInt i = 0; i < NX; i++) {
+        for (OSQPInt j = 0; j < NU; j++) {
+            Bd_flat[i * NU + j] = Bd[i][j];
+        }
+    }
     
-    for (OSQPInt i = 0; i < R_BAND; i++) mat_mul(AK_powers[i], Bd_flat, &P_blocks[i * NX * NU], NX, NX, NU);    mat_set(M_blocks, 0.0, (R_BAND + 1) * NU, NU);
-    for (OSQPInt i = 0; i < NU; i++) M_blocks[i * NU + i] = 1.0;
+    // 4. Compute P_blocks
+    for (OSQPInt i = 0; i < R_BAND; i++) {
+        mat_mul(AK_powers[i], Bd_flat, &P_blocks[i * NX * NU], NX, NX, NU);    
+    }
     
+    // 5. Compute M_blocks
+    mat_set(M_blocks, 0.0, (R_BAND + 1) * NU, NU);
+    for (OSQPInt i = 0; i < NU; i++) {
+        M_blocks[i * NU + i] = 1.0;
+    }
     for (OSQPInt i = 1; i <= R_BAND; i++) {
         OSQPFloat KAK[NU * NX];
         mat_mul((OSQPFloat *)K, AK_powers[i - 1], KAK, NU, NX, NX);
         mat_mul(KAK, Bd_flat, &M_blocks[i * NU * NU], NU, NX, NU);
     }
     
+    // 6. Compute H_blocks
     for (OSQPInt i = 1; i <= R_BAND; i++) {
         OSQPFloat CAK[NH * NX];
         mat_mul((OSQPFloat *)jacobian_H, AK_powers[i - 1], CAK, NH, NX, NX);
         mat_mul(CAK, Bd_flat, &H_blocks[(i - 1) * NH * NU], NH, NX, NU);
     }
 }
-
-
-
 OSQPCscMatrix* build_P(const OSQPFloat Q_diag[NX], const OSQPFloat R_diag[NU], const OSQPFloat P_diag[NX], const OSQPFloat K[NU][NX], const OSQPFloat P_blocks[], const OSQPFloat M_blocks[], const OSQPFloat e_free[][NX], OSQPFloat q[], OSQPCscMatrix *P_existing, OSQPInt r_local, OSQPInt recompute_hessian) {
     OSQPInt setup = (P_existing == NULL);
     OSQPInt P_nnz_est = N_VARS * (r_local * NU + NU);
@@ -780,20 +830,25 @@ int main(void) {
     
     
     // --- Cost Weights ---
-    const OSQPFloat Q_diag[NX] = {50.0 * DT, 10.0 * DT}; 
-    const OSQPFloat R_diag[NU] = {100.0 * DT};      
-    const OSQPFloat P_diag[NX] = {1000.0 , 100.0}; 
+    const OSQPFloat Q_diag[NX] = {1000.0 * DT, 500.0 * DT, 0.0, 0.0}; 
+    const OSQPFloat R_diag[NU] = {0.001 * DT, 0.01 * DT};      
+    const OSQPFloat P_diag[NX] = {1000.0, 500.0, 0.0, 0.0}; 
 
     // --- Setpoints & Bounds ---
-    OSQPFloat x_current[NX] = {1.0,1.0};//initial point
-    OSQPFloat x_target[NX] = { 0.0 ,0.0};//target point
-    OSQPFloat u_applied[NU] = {0.0};
-    OSQPFloat u_target[NU] = {0.0};
+    OSQPFloat x_current[NX] = {-0.7, 0.0, 0.0, 0.0}; // Initial point
+    OSQPFloat x_target[NX]  = { 0.0, 0.0, 0.0, 0.0}; // Target point (Hover)
+    OSQPFloat u_applied[NU] = {0.0, 0.0};
+    OSQPFloat u_target[NU]  = {0.0, 0.0};
 
-    const OSQPFloat x_min[NX] = {-10.0, -10.0};
-    const OSQPFloat x_max[NX] = { 10.0,  10.0};
-    const OSQPFloat u_min[NU] = {-3.0};
-    const OSQPFloat u_max[NU] = { 3.0};
+    // State Bounds: Pitch constrained to +- 40 degrees (0.698 rad)
+    const OSQPFloat x_min[NX] = {-1.0, -100.0, -100.0, -100.0};
+    const OSQPFloat x_max[NX] = { 1.0,  100.0,  100.0,  100.0};
+    
+    // Input Bounds: Pitch +-24V, Yaw +-15V
+    const OSQPFloat u_min[NU] = {-24.0, -15.0};
+    const OSQPFloat u_max[NU] = { 24.0,  15.0};
+
+
     linearization(x_current, u_applied, Ad, Bd, d_lin);
     calc_h_gradient(x_current, jacobian_H, h_val);
     OSQPFloat Edist[NX] = {0};
@@ -892,36 +947,38 @@ int main(void) {
     osqp_set_default_settings(settings);
     #if FORMULATION == OPT_CONDENSED
         settings->adaptive_rho = 1.0;
-        //settings->check_termination = 1;//exit immediately when hit accurarcy target
-        settings->eps_abs = 1e-3; 
-        settings->eps_rel = 1e-3;
-        settings->alpha = 1.0;
+        settings->check_termination = 1;//exit immediately when hit accurarcy target
+        settings->eps_abs = 1e-5; 
+        settings->eps_rel = 1e-5;
+        settings->alpha = 1.2;
         //settings->adaptive_rho_interval = 1;
         settings->warm_starting = 1;
         settings->max_iter = 50;
         settings->verbose = 0;
-        //settings->scaling = 0;//no scaling since stacking already condensed
+        settings->scaling = 1;//no scaling since stacking already condensed
+        settings->polishing = 1;
     #elif FORMULATION == OPT_NON_CONDENSED
-        settings->alpha = 1.0;//too loose will fail for stabilize to unstable equilibrium
-        //settings->scaling= 10;
+        settings->alpha = 1.2;//too loose will fail for stabilize to unstable equilibrium
+        //settings->scaling= 1;
         settings->verbose = 0;
         settings->adaptive_rho = 1;
-        //settings->check_termination = 1;
+        settings->check_termination = 1;
         settings->max_iter = 50;//make sure is not reached for 100% solved
         settings->warm_starting = 1;//default for grampc
-        settings->eps_abs = 1e-3;
-        settings->eps_rel = 1e-3;
-
+        settings->eps_abs = 1e-5;
+        settings->eps_rel = 1e-5;
+        settings->polishing = 1;
     #elif FORMULATION == OPT_SPARSE_CONDENSED
-        settings->alpha = 1.0;      // higher relaxation for faster convergence
-        //settings->scaling= 50;      // stronger scaling to improve conditioning
+        settings->alpha = 1.2;      // higher relaxation for faster convergence
+        settings->scaling= 1;      // stronger scaling to improve conditioning
         settings->verbose = 0;
         settings->adaptive_rho = 1;
-        //settings->check_termination = 1;
+        settings->check_termination = 1;
         settings->max_iter = 50;//make sure is not reached for 100% solved
         settings->warm_starting = 1;//default for grampc
-        settings->eps_abs = 1e-3;   // slightly looser tolerances to aid feasibility
-        settings->eps_rel = 1e-3;
+        settings->eps_abs = 1e-5;   // slightly looser tolerances to aid feasibility
+        settings->eps_rel = 1e-5;
+        settings->polishing = 1;
     
     #endif
 

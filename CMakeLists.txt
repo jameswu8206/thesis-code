@@ -6,13 +6,11 @@ project(mpc_controller)
 # We DO NOT list header (.h) files here; CMake finds them automatically.
 set(SOURCES
     mpc_pipeline.c
+    mpc_pipeline_helpers.c
+    mpc_pipeline_formulation_helpers.c
     my_timing.c
 )
 
-set(CND
-    condensedAB.c
-    my_timing.c
-)
 
 set(HELI
     helicoptor.c
@@ -24,33 +22,34 @@ set(HELIN
 )
 set(PEND
     invert_pendulum.c
+
     my_timing.c
 )
+set(2DOF
+    2Dof_heli.c
+    my_timing.c
+)
+
 set(CRANE
     crane_2D.c
+    mpc_pipeline_helpers.c
+    mpc_pipeline_formulation_helpers.c
     my_timing.c
 )
-set(LTV
-    crane_LTV.c
-    my_timing.c
-)
+
 # 2. Create the App
 add_executable(mpc_test ${SOURCES})
-add_executable(condensed ${CND})
+add_executable(2dof ${2DOF})
 add_executable(helicoptor ${HELI})
 add_executable(helin ${HELIN})
 add_executable(pendulum ${PEND})
 add_executable(crane ${CRANE})
-add_executable(ltv ${LTV})
+
+
 
 # 3. Setup Header Paths (The "Spotlight")
 # This replaces the need for any CMakeLists.txt inside the include folder
 target_include_directories(mpc_test PRIVATE
-    "${CMAKE_SOURCE_DIR}/include"
-    "${CMAKE_SOURCE_DIR}/include/public"
-)
-
-target_include_directories(condensed PRIVATE
     "${CMAKE_SOURCE_DIR}/include"
     "${CMAKE_SOURCE_DIR}/include/public"
 )
@@ -67,11 +66,11 @@ target_include_directories(pendulum PRIVATE
     "${CMAKE_SOURCE_DIR}/include"
     "${CMAKE_SOURCE_DIR}/include/public"
 )
-target_include_directories(crane PRIVATE
+target_include_directories(2dof PRIVATE
     "${CMAKE_SOURCE_DIR}/include"
     "${CMAKE_SOURCE_DIR}/include/public"
 )
-target_include_directories(ltv PRIVATE
+target_include_directories(crane PRIVATE
     "${CMAKE_SOURCE_DIR}/include"
     "${CMAKE_SOURCE_DIR}/include/public"
 )
@@ -90,9 +89,8 @@ endif()
 
 # Link it!
 target_link_libraries(mpc_test PRIVATE ${OSQP_LIB})
-target_link_libraries(condensed PRIVATE ${OSQP_LIB})
 target_link_libraries(helicoptor PRIVATE ${OSQP_LIB})
 target_link_libraries(helin PRIVATE ${OSQP_LIB})
 target_link_libraries(pendulum PRIVATE ${OSQP_LIB})
 target_link_libraries(crane PRIVATE ${OSQP_LIB})
-target_link_libraries(ltv PRIVATE ${OSQP_LIB})
+target_link_libraries(2dof PRIVATE ${OSQP_LIB})

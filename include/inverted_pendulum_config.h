@@ -1,5 +1,5 @@
-#ifndef MPC_PIPELINE_CONFIG_H
-#define MPC_PIPELINE_CONFIG_H
+#ifndef INVERTED_PENDULUM_CONFIG_H
+#define INVERTED_PENDULUM_CONFIG_H
 
 /* =========================================================
  * FORMULATION SELECTOR
@@ -13,20 +13,22 @@
 #define OPT_NON_CONDENSED     1
 #define OPT_SPARSE_CONDENSED  2
 
-#define FORMULATION 2 /* <--- SET YOUR METHOD HERE */
+#define FORMULATION 0 /* <--- SET YOUR METHOD HERE */
+
+#define CT 0 /* Set to 1 to enable explicit check_termination calls after each solve. Only applies to non-condensed formulation. */
 
 /* ---------------------------------------------------------
  * Problem Constants & Parameters
  * --------------------------------------------------------- */
-#define NX 6
-#define NU 2
-#define N 50
-#define ND 6
-#define NH 3
-#define DT 0.0400
-#define Tsim 100.0
-#define R_BAND 3
-#define MAXITER 50
+#define NX 2
+#define NU 1
+#define N 120
+#define ND 1
+#define NH 0
+#define DT 0.01667
+#define Tsim 11.0
+#define R_BAND 2
+#define MAXITER 10000
 #define TERMINATION_TOLERANCE 1e-4
 
 /* ---------------------------------------------------------
