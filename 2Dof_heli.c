@@ -16,19 +16,19 @@
 #define OPT_NON_CONDENSED     1
 #define OPT_SPARSE_CONDENSED  2
 
-#define FORMULATION 2  // <--- SET YOUR METHOD HERE
+#define FORMULATION 2 // <--- SET YOUR METHOD HERE
 
 /* ---------------------------------------------------------
  * Problem Constants & Parameters
  * --------------------------------------------------------- */
 #define NX 4    // 4 States: Pitch, Yaw, Pitch_dot, Yaw_dot
 #define NU 2    // 2 Inputs: Pitch voltage, Yaw voltage
-#define N 40    // Adjust based on your benchmark scope (e.g., 10, 20, 40)
+#define N 50    // Adjust based on your benchmark scope (e.g., 10, 20, 40)
 #define ND 1    
 #define NH 0    // No nonlinear constraints needed; handled natively via box bounds
-#define DT 0.0250 // 50ms sampling time
+#define DT 0.0200 // 50ms sampling time
 #define Tsim 5.0
-#define R_BAND 4
+#define R_BAND N/2
 
 /* ---------------------------------------------------------
  * Formulation-Specific Dimensions
@@ -881,7 +881,10 @@ int main(void) {
 
 
 
-    const OSQPFloat eta_pri = 1000.0; // CMoN Gatekeeper Tolerance
+    const OSQPFloat eps_abs = 0.0344; // Absolute tolerance base
+    const OSQPFloat eps_rel = 0.0344; // Relative tolerance scale
+
+    const OSQPFloat eta_pri = eps_abs * sqrt(NX) + eps_rel * vec_norm(x_current, NX);;  // CMoN Gatekeeper Tolerance
 
 
     #if FORMULATION == OPT_CONDENSED
@@ -946,40 +949,38 @@ int main(void) {
     OSQPSettings *settings = (OSQPSettings *)malloc(sizeof(OSQPSettings));
     osqp_set_default_settings(settings);
     #if FORMULATION == OPT_CONDENSED
-        settings->adaptive_rho = 1.0;
+        settings->alpha = 1.6;      // higher relaxation for faster convergence
+        settings->adaptive_rho = 1;
         settings->check_termination = 1;//exit immediately when hit accurarcy target
-        settings->eps_abs = 1e-5; 
-        settings->eps_rel = 1e-5;
-        settings->alpha = 1.2;
-        //settings->adaptive_rho_interval = 1;
+        settings->eps_abs = 1e-3; 
+        settings->eps_rel = 1e-3;
         settings->warm_starting = 1;
         settings->max_iter = 50;
         settings->verbose = 0;
-        settings->scaling = 1;//no scaling since stacking already condensed
-        settings->polishing = 1;
+        settings->scaling = 0;
+        //settings->polishing = 1;
     #elif FORMULATION == OPT_NON_CONDENSED
-        settings->alpha = 1.2;//too loose will fail for stabilize to unstable equilibrium
-        //settings->scaling= 1;
+        settings->alpha = 1.6;
+        //settings->scaling = 50;
+        settings->check_termination = 5;//exit immediately when hit accurarcy target
         settings->verbose = 0;
         settings->adaptive_rho = 1;
-        settings->check_termination = 1;
-        settings->max_iter = 50;//make sure is not reached for 100% solved
         settings->warm_starting = 1;//default for grampc
-        settings->eps_abs = 1e-5;
-        settings->eps_rel = 1e-5;
-        settings->polishing = 1;
+        settings->eps_abs = 1e-3;
+        settings->eps_rel = 1e-3;
+        settings->max_iter = 50;
+        //settings->polishing = 0;
     #elif FORMULATION == OPT_SPARSE_CONDENSED
-        settings->alpha = 1.2;      // higher relaxation for faster convergence
-        settings->scaling= 1;      // stronger scaling to improve conditioning
+        settings->alpha = 1.6;      // higher relaxation for faster convergence
         settings->verbose = 0;
         settings->adaptive_rho = 1;
-        settings->check_termination = 1;
         settings->max_iter = 50;//make sure is not reached for 100% solved
+        settings->check_termination = 1;//exit immediately when hit accurarcy target
         settings->warm_starting = 1;//default for grampc
-        settings->eps_abs = 1e-5;   // slightly looser tolerances to aid feasibility
-        settings->eps_rel = 1e-5;
-        settings->polishing = 1;
-    
+        settings->eps_abs = 1e-3;   // slightly looser tolerances to aid feasibility
+        settings->eps_rel = 1e-3;
+        //settings->scaling = 0;
+        //settings->polishing = 1;
     #endif
 
     OSQPSolver *solver;

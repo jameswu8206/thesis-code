@@ -24,8 +24,8 @@
 #define ND 6
 #define NH 3
 #define DT 0.0400
-#define Tsim 100.0
-#define R_BAND 3
+#define Tsim 25.0
+#define R_BAND N
 #define MAXITER 50
 #define TERMINATION_TOLERANCE 1e-4
 
@@ -44,7 +44,7 @@
  * --------------------------------------------------------- */
 #define FORCE_LINEARIZATION_BURST 0
 #define FORCE_LINEARIZATION_COOLDOWN 0
-#define FORCE_LINEARIZATION_EMERGENCY_KAPPA 10000.0
+#define FORCE_LINEARIZATION_EMERGENCY_KAPPA 10.0
 
 /* ---------------------------------------------------------
  * Formulation-Specific Dimensions

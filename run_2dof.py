@@ -6,7 +6,7 @@ import os
 DEFAULT_CONFIGS = {
     'N': [10, 15, 20, 30, 40, 50],
     'MAXITER': [3,10,30,50],
-    'FORMULATION': [0,1,2]
+    'FORMULATION': [2]
 }
 
 # --- IMPORTANT: Update this to the exact path of your C file ---
@@ -131,7 +131,7 @@ def main():
         print("|---|" + "|".join(["---"] * len(configs['MAXITER'])) + "|")
         
         for n in configs['N']:
-            dt = 1.0 / n
+            dt = round(1.0 / n, 3)
             row = [f"**{n}**"]
             
             for maxiter in configs['MAXITER']:

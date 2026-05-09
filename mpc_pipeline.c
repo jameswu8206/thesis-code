@@ -95,7 +95,9 @@ int main(void) {
 
 
     // Primary mismatch threshold for normal trigger-based re-linearization.
-    const OSQPFloat eta_pri = 1.0; // CMoN Gatekeeper Tolerance
+    const OSQPFloat eps_abs = 0.19; // Absolute tolerance base
+    const OSQPFloat eps_rel = 0.19; // Relative tolerance scale
+    const OSQPFloat eta_pri = eps_abs * sqrt(NX) + eps_rel * vec_norm(x_current, NX);; // CMoN Gatekeeper Tolerance
     // Emergency threshold can bypass cooldown and force immediate refresh.
     const OSQPFloat emergency_kappa = FORCE_LINEARIZATION_EMERGENCY_KAPPA;
     // User-tunable cadence guards: minimum burst and waiting period.
@@ -169,37 +171,36 @@ int main(void) {
     OSQPSettings *settings = (OSQPSettings *)malloc(sizeof(OSQPSettings));
     osqp_set_default_settings(settings);
     #if FORMULATION == OPT_CONDENSED
-        settings->alpha = 1.3;      // higher relaxation for faster convergence
+        settings->alpha = 1.6;      // higher relaxation for faster convergence
         settings->adaptive_rho = 1;
-        //settings->check_termination = 100;//exit immediately when hit accurarcy target
-        settings->eps_abs = 1e-5; 
-        settings->eps_rel = 1e-5;
+        settings->check_termination = 8;//exit immediately when hit accurarcy target
+        settings->eps_abs = 1e-3; 
+        settings->eps_rel = 1e-3;
         settings->warm_starting = 1;
         settings->max_iter = MAXITER;
         settings->verbose = 0;
         settings->scaling = 0;
         //settings->polishing = 1;
     #elif FORMULATION == OPT_NON_CONDENSED
-        settings->alpha = 1.4;
-        //settings->scaling = 5;
+        settings->alpha = 1.6;
+        settings->scaling = 1;
         settings->check_termination = 1;//exit immediately when hit accurarcy target
         settings->verbose = 0;
         settings->adaptive_rho = 1;
         settings->warm_starting = 1;//default for grampc
-        settings->eps_abs = 1e-5;
-        settings->eps_rel = 1e-5;
+        settings->eps_abs = 1e-3;
+        settings->eps_rel = 1e-3;
         settings->max_iter = MAXITER;
-        //settings->scaling = 1;
-        //settings->polishing = 1;
+        //settings->polishing = 0;
     #elif FORMULATION == OPT_SPARSE_CONDENSED
-        settings->alpha = 1.4;      // higher relaxation for faster convergence
+        settings->alpha = 1.6;      // higher relaxation for faster convergence
         settings->verbose = 0;
         settings->adaptive_rho = 1;
         settings->max_iter = MAXITER;//make sure is not reached for 100% solved
-        settings->check_termination = 1;//exit immediately when hit accurarcy target
+        settings->check_termination = 3;//exit immediately when hit accurarcy target
         settings->warm_starting = 1;//default for grampc
-        settings->eps_abs = 1e-5;   // slightly looser tolerances to aid feasibility
-        settings->eps_rel = 1e-5;
+        settings->eps_abs = 1e-3;   // slightly looser tolerances to aid feasibility
+        settings->eps_rel = 1e-3;
         //settings->scaling = 1;
         //settings->polishing = 1;
     #endif
