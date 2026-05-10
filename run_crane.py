@@ -4,8 +4,8 @@ import os
 
 configs = {
     'N': [10, 15, 20, 30, 40, 50],
-    'MAXITER': [3, 10,30,50],
-    'FORMULATION': [1,2]
+    'MAXITER': [3, 10, 30, 50],
+    'FORMULATION': [0,1,2]
 }
 
 def modify_config(formulation, n, dt, maxiter):
@@ -42,6 +42,7 @@ def parse_output(output):
     solver_time = "N/A"
     tsim = "N/A"
     cost = "N/A"
+    linearizations = "N/A"
     status_fail = False
     fail_msg = ""
     
@@ -65,9 +66,15 @@ def parse_output(output):
     if m_cost:
         cost = m_cost.group(1)
         
+    # Extract the number of linearizations performed
+    m_lin = re.search(r'Linearizations performed:\s*(\d+)', output)
+    if m_lin:
+        linearizations = m_lin.group(1)
+        
     if status_fail:
         return f"{fail_msg}"
     else:
+        # Added linearizations to the third position
         return f"{solver_time}/{cost}"
 
 def main():

@@ -14,6 +14,7 @@
 #define OPT_SPARSE_CONDENSED  2
 
 #define FORMULATION 2 /* <--- SET YOUR METHOD HERE */
+#define ANGLE 1
 
 /* ---------------------------------------------------------
  * Problem Constants & Parameters
