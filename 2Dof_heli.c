@@ -17,6 +17,8 @@
 #define OPT_SPARSE_CONDENSED  2
 
 #define FORMULATION 2 // <--- SET YOUR METHOD HERE
+#define MAXITER 50 // <--- Set your max iterations here (also update in run_2dof.py for consistency)
+
 
 /* ---------------------------------------------------------
  * Problem Constants & Parameters
@@ -28,7 +30,7 @@
 #define NH 0    // No nonlinear constraints needed; handled natively via box bounds
 #define DT 0.0200 // 50ms sampling time
 #define Tsim 5.0
-#define R_BAND N/2
+#define R_BAND N
 
 /* ---------------------------------------------------------
  * Formulation-Specific Dimensions
@@ -881,9 +883,21 @@ int main(void) {
 
 
 
-    const OSQPFloat eps_abs = 0.0344; // Absolute tolerance base
-    const OSQPFloat eps_rel = 0.0344; // Relative tolerance scale
+    OSQPFloat eps_abs;
+    OSQPFloat eps_rel;
 
+    if((MAXITER==3 && FORMULATION ==1 && N>=40) || (FORMULATION ==2 && N== 10)){
+            eps_abs = 0.005; // Update these if you intended them to be different
+            eps_rel = 0.005;
+    }
+    if(FORMULATION == 2 && N != 10){
+            eps_abs = 100; // Update these if you intended them to be different
+            eps_rel = 100;
+    }
+    else{
+            eps_abs = 0.05; // Update these if you intended them to be different
+            eps_rel = 0.05;
+    }
     const OSQPFloat eta_pri = eps_abs * sqrt(NX) + eps_rel * vec_norm(x_current, NX);;  // CMoN Gatekeeper Tolerance
 
 
@@ -948,38 +962,22 @@ int main(void) {
     // --- OSQP Setup ---
     OSQPSettings *settings = (OSQPSettings *)malloc(sizeof(OSQPSettings));
     osqp_set_default_settings(settings);
+    settings->alpha = 1.6; 
+    settings->adaptive_rho = 1;
+    settings->warm_starting = 1;
+    settings->max_iter = MAXITER;
+    settings->verbose = 0;
+    settings->eps_abs = 1e-3;
+    settings->eps_rel = 1e-3;
     #if FORMULATION == OPT_CONDENSED
-        settings->alpha = 1.6;      // higher relaxation for faster convergence
-        settings->adaptive_rho = 1;
-        settings->check_termination = 1;//exit immediately when hit accurarcy target
-        settings->eps_abs = 1e-3; 
-        settings->eps_rel = 1e-3;
-        settings->warm_starting = 1;
-        settings->max_iter = 50;
-        settings->verbose = 0;
+        settings->check_termination = 1;
         settings->scaling = 0;
-        //settings->polishing = 1;
     #elif FORMULATION == OPT_NON_CONDENSED
-        settings->alpha = 1.6;
-        //settings->scaling = 50;
-        settings->check_termination = 5;//exit immediately when hit accurarcy target
-        settings->verbose = 0;
-        settings->adaptive_rho = 1;
-        settings->warm_starting = 1;//default for grampc
-        settings->eps_abs = 1e-3;
-        settings->eps_rel = 1e-3;
-        settings->max_iter = 50;
-        //settings->polishing = 0;
+        settings->check_termination = 1;
+        settings->scaling = 0;
     #elif FORMULATION == OPT_SPARSE_CONDENSED
-        settings->alpha = 1.6;      // higher relaxation for faster convergence
-        settings->verbose = 0;
-        settings->adaptive_rho = 1;
-        settings->max_iter = 50;//make sure is not reached for 100% solved
-        settings->check_termination = 1;//exit immediately when hit accurarcy target
-        settings->warm_starting = 1;//default for grampc
-        settings->eps_abs = 1e-3;   // slightly looser tolerances to aid feasibility
-        settings->eps_rel = 1e-3;
-        //settings->scaling = 0;
+        settings->check_termination = 10;
+        settings->scaling = 2;
         //settings->polishing = 1;
     #endif
 

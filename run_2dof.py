@@ -24,7 +24,7 @@ def modify_c_file(c_file_path, formulation, n, dt, maxiter):
     content = re.sub(r'#define DT\s+[\d\.]+', f'#define DT {dt:.4f}', content)
     
     # Update OSQP max_iter setting (this will replace it in all the #if / #elif blocks)
-    content = re.sub(r'settings->max_iter\s*=\s*\d+;', f'settings->max_iter = {maxiter};', content)
+    content = re.sub(r'#define MAXITER\s+\d+', f'#define MAXITER {maxiter}', content)
     
     with open(c_file_path, 'w') as f:
         f.write(content)
@@ -61,6 +61,10 @@ def parse_output(output):
     m_cost = re.search(r'Final End Cost \(log10\) -> ([\-\d\.]+)', output)
     if m_cost:
         cost = m_cost.group(1)
+    
+    m_lin = re.search(r'Linearizations performed:\s*(\d+)', output)
+    if m_lin:
+        linearizations = m_lin.group(1)
         
     if status_fail:
         return f"{fail_msg}/N/A"
