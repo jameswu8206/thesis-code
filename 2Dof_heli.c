@@ -898,7 +898,7 @@ int main(void) {
             eps_abs = 0.05; // Update these if you intended them to be different
             eps_rel = 0.05;
     }
-    const OSQPFloat eta_pri = eps_abs * sqrt(NX) + eps_rel * vec_norm(x_current, NX);;  // CMoN Gatekeeper Tolerance
+    const OSQPFloat eta_pri = eps_abs * sqrt(NX) + eps_rel * vec_norm(x_current, NX);  // CMoN Gatekeeper Tolerance
 
 
     #if FORMULATION == OPT_CONDENSED

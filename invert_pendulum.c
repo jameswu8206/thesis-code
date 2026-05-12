@@ -15,7 +15,7 @@
 #define OPT_CONDENSED         0
 #define OPT_NON_CONDENSED     1
 #define OPT_SPARSE_CONDENSED  2
-
+#define MAXITER 50
 #define FORMULATION 2  // <--- SET YOUR METHOD HERE
 
 /* ---------------------------------------------------------
@@ -826,8 +826,18 @@ int main(void) {
 
 
 
-    const OSQPFloat eta_pri = 1000.0; // CMoN Gatekeeper Tolerance
+    OSQPFloat eps_abs;
+    OSQPFloat eps_rel;
 
+    if(FORMULATION==1&&MAXITER==3){
+            eps_abs = 0.005; // Update these if you intended them to be different
+            eps_rel = 0.005;
+    }
+    else{
+            eps_abs = 100; // Update these if you intended them to be different
+            eps_rel = 100;
+    }
+    const OSQPFloat eta_pri = eps_abs * sqrt(NX) + eps_rel * vec_norm(x_current, NX);;
 
     #if FORMULATION == OPT_CONDENSED
         build_AB(Ad, Bd, A_pow, AB_mat);
@@ -890,39 +900,22 @@ int main(void) {
     // --- OSQP Setup ---
     OSQPSettings *settings = (OSQPSettings *)malloc(sizeof(OSQPSettings));
     osqp_set_default_settings(settings);
+    settings->alpha = 1.6; 
+    settings->adaptive_rho = 1;
+    settings->warm_starting = 1;
+    settings->max_iter = MAXITER;
+    settings->verbose = 0;
+    settings->eps_abs = 1e-3;
+    settings->eps_rel = 1e-3;
     #if FORMULATION == OPT_CONDENSED
-        settings->adaptive_rho = 1.0;
-        //settings->check_termination = 1;//exit immediately when hit accurarcy target
-        settings->eps_abs = 1e-3; 
-        settings->eps_rel = 1e-3;
-        settings->alpha = 1.0;
-        //settings->adaptive_rho_interval = 1;
-        settings->warm_starting = 1;
-        settings->max_iter = 50;
-        settings->verbose = 0;
-        //settings->scaling = 0;//no scaling since stacking already condensed
+        settings->check_termination = 1;
+        settings->scaling = 0;
     #elif FORMULATION == OPT_NON_CONDENSED
-        settings->alpha = 1.0;//too loose will fail for stabilize to unstable equilibrium
-        //settings->scaling= 10;
-        settings->verbose = 0;
-        settings->adaptive_rho = 1;
-        //settings->check_termination = 1;
-        settings->max_iter = 50;//make sure is not reached for 100% solved
-        settings->warm_starting = 1;//default for grampc
-        settings->eps_abs = 1e-3;
-        settings->eps_rel = 1e-3;
-
+        settings->check_termination = 1;
+        settings->scaling = 0;
     #elif FORMULATION == OPT_SPARSE_CONDENSED
-        settings->alpha = 1.0;      // higher relaxation for faster convergence
-        //settings->scaling= 50;      // stronger scaling to improve conditioning
-        settings->verbose = 0;
-        settings->adaptive_rho = 1;
-        //settings->check_termination = 1;
-        settings->max_iter = 50;//make sure is not reached for 100% solved
-        settings->warm_starting = 1;//default for grampc
-        settings->eps_abs = 1e-3;   // slightly looser tolerances to aid feasibility
-        settings->eps_rel = 1e-3;
-    
+        settings->check_termination = 1;
+        settings->scaling = 0;
     #endif
 
     OSQPSolver *solver;
